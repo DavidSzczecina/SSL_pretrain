@@ -1,0 +1,6 @@
+data/
+data
+pretrained_encoders
+results_cifar10
+results_cifar100
+slurm_output
