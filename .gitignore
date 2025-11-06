@@ -3,4 +3,10 @@ data
 pretrained_encoders
 results_cifar10
 results_cifar100
+results_cifar-n
+results_cifar-10n
+results_cifar-100n
 slurm_output
+old
+.ipynb_checkpoints
+__pycache__
