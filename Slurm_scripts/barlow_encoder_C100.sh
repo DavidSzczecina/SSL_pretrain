@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=SimCLR_encoder_c100_s5
+#SBATCH --job-name=barlow_encoder_C100
 #SBATCH --account=def-pfieguth
-#SBATCH --time=4:00:00
-#SBATCH --mem-per-cpu=5G
+#SBATCH --time=12:00:00
+#SBATCH --mem-per-cpu=10G
 #SBATCH --gpus=a100_1g.5gb:1
-#SBATCH --output=slurm_output/SimCLR_encoder_c100_s5.out
-#SBATCH --error=slurm_output/SimCLR_encoder_c100_s5.err
+#SBATCH --output=slurm_output/barlow_encoder_C100.out
+#SBATCH --error=slurm_output/barlow_encoder_C100.err
 #SBATCH --mail-user=dszczeci@uwaterloo.ca
 #SBATCH --mail-type=ALL
 
@@ -22,35 +22,26 @@ echo ">>> Running SSL PRETRAINING experiments..."
 
 
 
-
-
 SSL_EPOCHS=100
 DATASET=cifar100
+SEEDS=(3 4 5)
 
-
-SEEDS=(5)
 for SEED in "${SEEDS[@]}"; do
-
-    
-    
-    EXP_NAME="simclr_${DATASET}_e${SSL_EPOCHS}_s${SEED}"
+    EXP_NAME="barlow_${DATASET}_e${SSL_EPOCHS}_s${SEED}"
     echo "[SSL PRETRAIN] SEED=${SEED} EPOCHS=${SSL_EPOCHS}"
     
     python ssl_cifar_experiment.py \
     --dataset "${DATASET}" \
     --mode pretrain \
-    --pretrain-name simclr \
+    --pretrain-name barlow \
     --seed "${SEED}" \
     --pretrain-epochs "${SSL_EPOCHS}" \
     --exp-name "${EXP_NAME}" \
-    --save-pretrained-encoder "simclr_${DATASET}_e${SSL_EPOCHS}_s${SEED}" \
+    --save-pretrained-encoder "barlow_${DATASET}_e${SSL_EPOCHS}_s${SEED}" \
     
     echo ">>> Finished pretraining: ${EXP_NAME}"
     echo "---------------------------------------------"
-    
-
 done
-
 
 
 

@@ -8,6 +8,7 @@ import torch.nn.functional as F
 import math
 
 
+SAVE_EPOCHS = {5, 10, 25, 50, 75, 100}
 
 # --------- Minimal NT-Xent from your file ---------
 class NTXent(nn.Module):
@@ -102,7 +103,8 @@ class SimCLRPretrainer(BasePretrainer):
 
             logger(f"[SimCLR] Epoch {ep:03d} | Loss={loss_sum / max(n, 1):.4f}")
 
-            if save_every > 0 and save_fn is not None and ep % save_every == 0:
+            #if save_every > 0 and save_fn is not None and ep % save_every == 0:
+            if save_fn is not None and ep in SAVE_EPOCHS:
                 save_fn(model, ep)
 
         logger(f"[SimCLR] Done in {(time.time() - t0) / 60:.2f} min")
@@ -155,175 +157,6 @@ def _make_proj(in_dim, hidden_dim, out_dim):
         return _ProjMLP(in_dim=in_dim, hidden_dim=hidden_dim, out_dim=out_dim)
 
 
-
-# SimSiam
-class _SimSiamNet(nn.Module):
-    def __init__(self, encoder: nn.Module, proj: nn.Module, pred: nn.Module):
-        super().__init__()
-        self.encoder = encoder
-        self.proj = proj
-        self.pred = pred  # predictor
-    def forward(self, x):
-        h = self.encoder(x, return_feat=True)
-        z = self.proj(h)
-        p = self.pred(z)
-        return z, p
-
-def _neg_cosine(p, z):
-    # Stop-grad on z
-    z = z.detach()
-    p = _normalize(p)
-    z = _normalize(z)
-    return - (p * z).sum(dim=1).mean()
-
-class SimSiamPretrainer(BasePretrainer):
-    name = "simsiam"
-
-    def build(self, encoder_backbone: nn.Module, in_dim=512, proj_dim=2048, hidden=2048, pred_dim=512, **_):
-        proj = _make_proj(in_dim=in_dim, hidden_dim=hidden, out_dim=proj_dim)
-        pred = _PredictorMLP(in_dim=proj_dim, hidden_dim=pred_dim, out_dim=proj_dim)
-        return _SimSiamNet(encoder_backbone, proj, pred)
-
-    def fit(self, model: nn.Module, ssl_loader, device: str,
-            epochs: int = 100, lr: float = 3e-4, wd: float = 1e-4,
-            save_every: int = 5, save_fn=None, logger=print, **_):
-        t0 = time.time()
-        model.to(device)
-        model.train()
-        opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
-
-        for ep in range(1, epochs+1):
-            ep_loss, n = 0.0, 0
-            for (x1, x2), _ in ssl_loader:
-                x1, x2 = x1.to(device), x2.to(device)
-
-                z1, p1 = model(x1)
-                z2, p2 = model(x2)
-
-                loss = _neg_cosine(p1, z2) / 2.0 + _neg_cosine(p2, z1) / 2.0
-                opt.zero_grad(set_to_none=True)
-                loss.backward()
-                opt.step()
-
-                ep_loss += loss.item() * x1.size(0)
-                n += x1.size(0)
-
-            logger(f"[SimSiam] epoch {ep:03d} | loss {ep_loss/max(n,1):.4f}")
-
-            if save_every > 0 and save_fn is not None and ep % save_every == 0:
-                save_fn(model, ep)
-
-        logger(f"[SimSiam] Done in {(time.time() - t0) / 60:.2f} min")
-        return model
-
-    def extract_encoder(self, model: nn.Module) -> nn.Module:
-        return model.encoder
-
-# BYOL
-class _BYOLNet(nn.Module):
-    """Online encoder+proj+pred and EMA target encoder+proj."""
-    def __init__(self, online_enc: nn.Module, online_proj: nn.Module, predictor: nn.Module,
-                 target_enc: nn.Module, target_proj: nn.Module):
-        super().__init__()
-        self.online_enc = online_enc
-        self.online_proj = online_proj
-        self.predictor = predictor
-
-        self.target_enc = target_enc
-        self.target_proj = target_proj
-        for p in self.target_enc.parameters(): p.requires_grad = False
-        for p in self.target_proj.parameters(): p.requires_grad = False
-
-    @torch.no_grad()
-    def update_target(self, m: float):
-        # EMA update
-        for p_o, p_t in zip(self.online_enc.parameters(), self.target_enc.parameters()):
-            p_t.data = p_t.data * m + p_o.data * (1.0 - m)
-        for p_o, p_t in zip(self.online_proj.parameters(), self.target_proj.parameters()):
-            p_t.data = p_t.data * m + p_o.data * (1.0 - m)
-
-    def online(self, x):
-        h = self.online_enc(x, return_feat=True)
-        z = self.online_proj(h)
-        p = self.predictor(z)
-        return p
-
-    @torch.no_grad()
-    def target(self, x):
-        h = self.target_enc(x, return_feat=True)
-        z = self.target_proj(h)
-        return z.detach()
-
-def _byol_loss(p, z):
-    # l2-normalized cosine similarity loss (MSE between normalized vectors up to a constant)
-    p = _normalize(p)
-    z = _normalize(z)
-    return 2 - 2 * (p * z).sum(dim=1).mean()
-
-class BYOLPretrainer(BasePretrainer):
-    name = "byol"
-
-    def build(self, encoder_backbone: nn.Module, in_dim=512, proj_dim=256, hidden=4096, pred_dim=4096, **_):
-        online_proj = _make_proj(in_dim=in_dim, hidden_dim=hidden, out_dim=proj_dim)
-        predictor = _PredictorMLP(in_dim=proj_dim, hidden_dim=pred_dim, out_dim=proj_dim)
-
-        # Make a deep copy for target encoder and head
-        import copy
-        target_enc = copy.deepcopy(encoder_backbone)
-        target_proj = copy.deepcopy(online_proj)
-
-        return _BYOLNet(encoder_backbone, online_proj, predictor, target_enc, target_proj)
-
-    def fit(self, model: nn.Module, ssl_loader, device: str,
-            epochs: int = 100, lr: float = 3e-4, wd: float = 1e-4,
-            base_momentum: float = 0.99,
-            save_every: int = 5, save_fn=None, logger=print, **_):
-        t0 = time.time()
-        model.to(device)
-        model.train()
-        opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
-
-        total_steps = epochs * max(1, len(ssl_loader))
-
-        def momentum_schedule(step):
-            if total_steps <= 1: return 1.0
-            return 1.0 - (1.0 - base_momentum) * (0.5 * (1 + math.cos(math.pi * step / (total_steps-1))))
-
-        step = 0
-        for ep in range(1, epochs+1):
-            ep_loss, n = 0.0, 0
-            for (x1, x2), _ in ssl_loader:
-                x1, x2 = x1.to(device), x2.to(device)
-
-                p1 = model.online(x1)
-                p2 = model.online(x2)
-                with torch.no_grad():
-                    z2 = model.target(x2)
-                    z1 = model.target(x1)
-
-                loss = (_byol_loss(p1, z2) + _byol_loss(p2, z1)) * 0.5
-
-                opt.zero_grad(set_to_none=True)
-                loss.backward()
-                opt.step()
-
-                m = momentum_schedule(step); step += 1
-                with torch.no_grad():
-                    model.update_target(m)
-
-                ep_loss += loss.item() * x1.size(0)
-                n += x1.size(0)
-
-            logger(f"[BYOL] epoch {ep:03d} | loss {ep_loss/max(n,1):.4f}")
-
-            if save_every > 0 and save_fn is not None and ep % save_every == 0:
-                save_fn(model, ep)
-
-        logger(f"[BYOL] Done in {(time.time() - t0) / 60:.2f} min")
-        return model
-
-    def extract_encoder(self, model: nn.Module) -> nn.Module:
-        return model.online_enc
 
 
 # Barlow Twins
@@ -391,7 +224,8 @@ class BarlowTwinsPretrainer(BasePretrainer):
 
             logger(f"[Barlow] epoch {ep:03d} | loss {ep_loss/max(n,1):.4f}")
 
-            if save_every > 0 and save_fn is not None and ep % save_every == 0:
+            #if save_every > 0 and save_fn is not None and ep % save_every == 0:
+            if save_fn is not None and ep in SAVE_EPOCHS:
                 save_fn(model, ep)
 
         logger(f"[Barlow] Done in {(time.time() - t0) / 60:.2f} min")
@@ -403,8 +237,6 @@ class BarlowTwinsPretrainer(BasePretrainer):
 
 _PRETRAINERS: Dict[str, Callable[[], BasePretrainer]] = {
     SimCLRPretrainer.name: SimCLRPretrainer,
-    SimSiamPretrainer.name: SimSiamPretrainer,
-    BYOLPretrainer.name: BYOLPretrainer,
     BarlowTwinsPretrainer.name: BarlowTwinsPretrainer,
 }
 

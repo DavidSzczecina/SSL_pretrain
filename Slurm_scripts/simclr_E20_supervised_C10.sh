@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=C100_baseline
+#SBATCH --job-name=C10_baseline_E20
 #SBATCH --account=def-pfieguth
-#SBATCH --time=10:00:00
-#SBATCH --mem-per-cpu=10G
+#SBATCH --time=24:00:00
+#SBATCH --mem-per-cpu=5G
 #SBATCH --gpus=a100_1g.5gb:1
-#SBATCH --output=slurm_output/C100_baseline.out
-#SBATCH --error=slurm_output/C100_baseline.err
+#SBATCH --output=slurm_output/C10_baseline_E20.out
+#SBATCH --error=slurm_output/C10_baseline_E20.err
 #SBATCH --mail-user=dszczeci@uwaterloo.ca
 #SBATCH --mail-type=ALL
 
@@ -21,10 +21,10 @@ cd ..
 
 # Common experiment variables
 
-DATASET="cifar100"
-EPOCHS_SUP=10             # supervised fine-tuning epochs
+DATASET="cifar10"
+EPOCHS_SUP=20             # supervised fine-tuning epochs
 NOISE_RATES=(0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9)
-SEEDS=(1 2 3 4 5)
+SEEDS=(1 2 3)
 
 
 
@@ -40,6 +40,7 @@ for SEED in "${SEEDS[@]}"; do
 
     python ssl_cifar_experiment.py \
       --dataset "${DATASET}" \
+      --results-root results_C10_long \
       --mode train_eval \
       --seed "${SEED}" \
       --epochs "${EPOCHS_SUP}" \
@@ -54,6 +55,9 @@ done
 
 
 echo "===== ALL EXPERIMENTS COMPLETED SUCCESSFULLY ====="
+
+
+
 
 
 

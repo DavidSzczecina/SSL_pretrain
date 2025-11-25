@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=SimCLR_encoder_c10
 #SBATCH --account=def-pfieguth
-#SBATCH --time=7:00:00
-#SBATCH --mem-per-cpu=10G
-#SBATCH --gpus=nvidia_h100_80gb_hbm3_2g.20gb:1
+#SBATCH --time=4:00:00
+#SBATCH --mem-per-cpu=5G
+#SBATCH --gpus=a100_1g.5gb:1
 #SBATCH --output=slurm_output/SimCLR_encoder_c10.out
 #SBATCH --error=slurm_output/SimCLR_encoder_c10.err
 #SBATCH --mail-user=dszczeci@uwaterloo.ca
@@ -26,7 +26,7 @@ echo ">>> Running SSL PRETRAINING experiments..."
 
 SSL_EPOCHS=100
 DATASET=cifar10
-SEEDS=(1 2 3 4 5)
+SEEDS=(5)
 
 for SEED in "${SEEDS[@]}"; do
 

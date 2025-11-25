@@ -3,9 +3,12 @@ data
 pretrained_encoders
 results_cifar10
 results_cifar100
+results_c10_long
+results_c100_long
 results_cifar-n
 results_cifar-10n
 results_cifar-100n
+figures
 slurm_output
 old
 .ipynb_checkpoints

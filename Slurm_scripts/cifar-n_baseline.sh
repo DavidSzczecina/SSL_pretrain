@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=Cifar-n_s5
 #SBATCH --account=def-pfieguth
-#SBATCH --time=10:00:00
+#SBATCH --time=3:00:00
 #SBATCH --mem-per-cpu=10G
-#SBATCH --gpus=nvidia_h100_80gb_hbm3_2g.20gb:1
-#SBATCH --output=slurm_output/Cifar-n.out
-#SBATCH --error=slurm_output/Cifar-n.err
+#SBATCH --gpus=a100_1g.5gb:1
+#SBATCH --output=slurm_output/Cifar-n_s5.out
+#SBATCH --error=slurm_output/Cifar-n_s5.err
 #SBATCH --mail-user=dszczeci@uwaterloo.ca
 #SBATCH --mail-type=ALL
 
@@ -21,18 +21,18 @@ cd ..
 
 # Common experiment variables
 
-DATASET="cifar-10n"
+
 EPOCHS_SUP=10             # supervised fine-tuning epochs
-EPOCHS_PRE=(5 10 25 50 75 100) # pretraining epochs to compare
-SEEDS=(1 2 3 4 5)
+#EPOCHS_PRE=(5 10 25 50 75 100) # pretraining epochs to compare
+SEEDS=(2 3 4 5 6)
 
 
 
 # BASELINE: Supervised training on noisy labels (no SSL pretrain)
 
-
+:'
 # CIFAR-10n --cifar10n-label-type aggre_label
-
+DATASET="cifar-10n"
 echo ">>> Running BASELINE supervised experiments..."
 for SEED in "${SEEDS[@]}"; do
     EXP_NAME="baseline_${DATASET}-Aggre_supE-${EPOCHS_SUP}_s-${SEED}"
@@ -49,10 +49,11 @@ for SEED in "${SEEDS[@]}"; do
     echo ">>> Finished baseline: ${EXP_NAME}"
     echo "---------------------------------------------"
 done
-
+'
 
  
 # CIFAR-10n --cifar10n-label-type worse_label
+DATASET="cifar-10n"
 for SEED in "${SEEDS[@]}"; do
     EXP_NAME="baseline_${DATASET}-Worse_supE-${EPOCHS_SUP}_s-${SEED}"
     echo "[BASELINE] SEED=${SEED}"
@@ -70,8 +71,9 @@ for SEED in "${SEEDS[@]}"; do
 done
 
 
-DATASET="cifar-100n"
+
 # CIFAR-100n
+DATASET="cifar-100n"
 for SEED in "${SEEDS[@]}"; do
     EXP_NAME="baseline_${DATASET}_supE-${EPOCHS_SUP}_s-${SEED}"
     echo "[BASELINE] SEED=${SEED}"

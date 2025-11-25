@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=C100_supervised
+#SBATCH --job-name=simclr_long_C100_s5
 #SBATCH --account=def-pfieguth
-#SBATCH --time=6:00:00
-#SBATCH --mem-per-cpu=10G
+#SBATCH --time=4:00:00
+#SBATCH --mem-per-cpu=5G
 #SBATCH --gpus=a100_1g.5gb:1
-#SBATCH --output=slurm_output/C100_supervised.out
-#SBATCH --error=slurm_output/C100_supervised.err
+#SBATCH --output=slurm_output/simclr_long_C100_s5.out
+#SBATCH --error=slurm_output/simclr_long_C100_s5.err
 #SBATCH --mail-user=dszczeci@uwaterloo.ca
 #SBATCH --mail-type=ALL
 
@@ -22,11 +22,12 @@ cd ..
 # Common experiment variables
 
 DATASET="cifar100"
-EPOCHS_SUP=10             # supervised fine-tuning epochs
-EPOCHS_PRE=(5 10 25 50 75 100) # pretraining epochs to compare
-NOISE_RATES=(0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9)
-SEEDS=(1 2 3 4 5)
-SEEDS=(1)
+EPOCHS_SUP=100             # supervised fine-tuning epochs
+EPOCHS_PRE=(25) # pretraining epochs to compare
+NOISE_RATES=(0.6)
+SEEDS=(4 5)
+
+
 
 # FINE-TUNE FROM PRETRAINED ENCODERS
 
@@ -40,6 +41,7 @@ for SEED in "${SEEDS[@]}"; do
 
       python ssl_cifar_experiment.py \
         --dataset "${DATASET}" \
+        --results-root results_C100_long \
         --mode train_eval \
         --seed "${SEED}" \
         --epochs "${EPOCHS_SUP}" \
@@ -52,6 +54,7 @@ for SEED in "${SEEDS[@]}"; do
     done
   done
 done
+
 
 echo "===== ALL EXPERIMENTS COMPLETED SUCCESSFULLY ====="
 

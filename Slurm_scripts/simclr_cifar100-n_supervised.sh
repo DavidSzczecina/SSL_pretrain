@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=C100_supervised
+#SBATCH --job-name=C100-n_supervised_s5
 #SBATCH --account=def-pfieguth
-#SBATCH --time=6:00:00
+#SBATCH --time=8:00:00
 #SBATCH --mem-per-cpu=10G
 #SBATCH --gpus=a100_1g.5gb:1
-#SBATCH --output=slurm_output/C100_supervised.out
-#SBATCH --error=slurm_output/C100_supervised.err
+#SBATCH --output=slurm_output/C100-n_supervised_s5.out
+#SBATCH --error=slurm_output/C100-n_supervised_s5.err
 #SBATCH --mail-user=dszczeci@uwaterloo.ca
 #SBATCH --mail-type=ALL
 
@@ -21,37 +21,38 @@ cd ..
 
 # Common experiment variables
 
-DATASET="cifar100"
+DATASET="cifar-100n"
+PRETRAIN_DATASET="cifar100"
 EPOCHS_SUP=10             # supervised fine-tuning epochs
 EPOCHS_PRE=(5 10 25 50 75 100) # pretraining epochs to compare
-NOISE_RATES=(0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9)
 SEEDS=(1 2 3 4 5)
-SEEDS=(1)
+
+
+
+
 
 # FINE-TUNE FROM PRETRAINED ENCODERS
 
+# CIFAR-100n 
 echo ">>> Running FINE-TUNING from pretrained encoders..."
 for SEED in "${SEEDS[@]}"; do
   for PRE_E in "${EPOCHS_PRE[@]}"; do
-    for NOISE in "${NOISE_RATES[@]}"; do
-
-      EXP_NAME="simclr_${DATASET}_preE-${PRE_E}_supE-${EPOCHS_SUP}_noise-${NOISE}_s-${SEED}"
-      echo "[FINETUNE] SEED=${SEED} PRETRAIN_EPOCHS=${PRE_E} NOISE=${NOISE} Supervised_Epochs=${EPOCHS_SUP}"
+      EXP_NAME="simclr_${DATASET}_preE-${PRE_E}_supE-${EPOCHS_SUP}_s-${SEED}"
+      echo "[FINETUNE] SEED=${SEED} PRETRAIN_EPOCHS=${PRE_E} Supervised_Epochs=${EPOCHS_SUP}"
 
       python ssl_cifar_experiment.py \
         --dataset "${DATASET}" \
         --mode train_eval \
         --seed "${SEED}" \
         --epochs "${EPOCHS_SUP}" \
-        --noise-rate "${NOISE}" \
         --exp-name "${EXP_NAME}" \
-        --pretrained-encoder-path "simclr_${DATASET}_e${PRE_E}_s${SEED}.pth"
+        --pretrained-encoder-path "simclr_${PRETRAIN_DATASET}_e${PRE_E}_s${SEED}.pth"
 
       echo ">>> Finished fine-tuning: ${EXP_NAME}"
       echo "---------------------------------------------"
-    done
   done
 done
+
 
 echo "===== ALL EXPERIMENTS COMPLETED SUCCESSFULLY ====="
 

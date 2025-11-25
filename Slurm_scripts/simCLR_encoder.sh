@@ -3,7 +3,7 @@
 #SBATCH --account=def-pfieguth
 #SBATCH --time=9:00:00
 #SBATCH --mem-per-cpu=10G
-#SBATCH --gpus=nvidia_h100_80gb_hbm3_2g.20gb:1
+#SBATCH --gpus=a100_1g.5gb:1
 #SBATCH --output=slurm_output/SimCLR_encoder.out
 #SBATCH --error=slurm_output/SimCLR_encoder.err
 #SBATCH --mail-user=dszczeci@uwaterloo.ca
