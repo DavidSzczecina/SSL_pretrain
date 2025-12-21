@@ -8,6 +8,9 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision import datasets, transforms, models
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import LinearSVC
+
 
 from cleanlab.filter import find_label_issues
 
@@ -230,6 +233,25 @@ def evaluate_train_noisy(model, loader, device):
             pred = model(x).argmax(1)
             correct += (pred==y).sum().item(); total += x.size(0)
     return correct/total
+
+
+@torch.no_grad()
+def extract_features(encoder: nn.Module, loader: DataLoader, device: str):
+    """
+    Runs the encoder in frozen mode and returns (X, y) numpy arrays
+    where X has shape [N, D] and y has shape [N].
+    """
+    encoder.eval()
+    feats = []
+    labels = []
+    for x, y in loader:
+        x = x.to(device)
+        z = encoder(x, return_feat=True)  # [B, D]
+        feats.append(z.cpu().numpy())
+        labels.append(y.numpy())
+    X = np.concatenate(feats, axis=0)
+    y = np.concatenate(labels, axis=0)
+    return X, y
 
 
 @torch.no_grad()
@@ -470,7 +492,7 @@ def load_encoder_into_classifier(path: str, clf: nn.Module):
 def main():
     p = argparse.ArgumentParser("CIFAR SSL → Train → Evaluate")
     # high-level mode
-    p.add_argument("--mode", choices=["pretrain","train_eval"], default="train_eval")
+    p.add_argument("--mode", choices=["pretrain","train_eval","ssl_sklearn"], default="train_eval")
     p.add_argument("--dataset", choices=["cifar10","cifar100","cifar-10n","cifar-100n"], default="cifar10")
     p.add_argument("--cifar10n-label-type", type=str,default="worse_label", choices=["worse_label","aggre_label"])
     p.add_argument("--device", default="cuda")
@@ -555,6 +577,76 @@ def main():
             noise_rate=args.noise_rate, workers=args.workers, seed=args.seed
         )
 
+    # -------- MODE: SSL features + sklearn heads (LogReg + SVM) --------
+    if args.mode == "ssl_sklearn":
+        if not args.pretrained_encoder_path:
+            raise ValueError("You must provide --pretrained-encoder-path when using --mode ssl_sklearn")
+
+        encoder_path = os.path.join(args.pretrained_dir, args.pretrained_encoder_path)
+        if not os.path.exists(encoder_path):
+            raise FileNotFoundError(f"Pretrained encoder not found at {encoder_path}")
+
+        # Build backbone and load SSL features
+        encoder = ResNet18Small(num_classes=num_classes, in_channels=3).to(device)
+        load_encoder_into_classifier(encoder_path, encoder)
+        print(f"Loaded pretrained encoder from {encoder_path}")
+        for p in encoder.parameters():
+            p.requires_grad = False  # fully frozen encoder
+
+        # Extract features for train and test
+        print("Extracting train features...")
+        X_train, y_train = extract_features(encoder, train_loader, device)
+        print("Extracting test features...")
+        X_test, y_test = extract_features(encoder, test_loader, device)
+
+        # ---- 1) Logistic Regression (multinomial) ----
+        print("Fitting Logistic Regression on SSL features...")
+        logreg = LogisticRegression(
+            multi_class="multinomial",
+            max_iter=1000,
+            n_jobs=-1,
+            verbose=0
+        )
+        logreg.fit(X_train, y_train)
+        logreg_acc = (logreg.predict(X_test) == y_test).mean()
+        print(f"[SSL + LogisticRegression] Test Acc = {logreg_acc * 100:.2f}%")
+
+        # ---- 2) Linear SVM ----
+        print("Fitting Linear SVM on SSL features...")
+        svm = LinearSVC()
+        svm.fit(X_train, y_train)
+        svm_acc = (svm.predict(X_test) == y_test).mean()
+        print(f"[SSL + LinearSVC]      Test Acc = {svm_acc * 100:.2f}%")
+
+        # (optional) write a tiny metrics row to CSV if you want consistency
+        # here we only report accuracy, no label-error detection
+        exp_dir = os.path.join(results_root, args.exp_name)
+        ensure_dir(exp_dir)
+        metrics_path = os.path.join(exp_dir, args.metrics_name)
+        base_row = {
+            "mode": "ssl_sklearn",
+            "dataset": args.dataset,
+            "noise_rate": args.noise_rate,
+            "pretrain_name": args.pretrain_name,
+            "pretrain_epochs": args.pretrain_epochs,
+            "finetune_epochs": 0,
+            "timestamp": time.time(),
+        }
+        fields = [
+            "mode","dataset","noise_rate","pretrain_name","pretrain_epochs",
+            "finetune_epochs","timestamp",
+            "logreg_acc","svm_acc"
+        ]
+        write_header = not os.path.exists(metrics_path)
+        with open(metrics_path, "a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fields)
+            if write_header: w.writeheader()
+            row = dict(base_row)
+            row["logreg_acc"] = float(logreg_acc)
+            row["svm_acc"] = float(svm_acc)
+            w.writerow(row)
+
+        return
 
     # -------- MODE: PRETRAIN (SSL only, then save encoder and exit) --------
     if args.mode == "pretrain":
