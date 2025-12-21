@@ -8,7 +8,6 @@ results_c100_long
 results_cifar-n
 results_cifar-10n
 results_cifar-100n
-figures
 slurm_output
 old
 .ipynb_checkpoints
