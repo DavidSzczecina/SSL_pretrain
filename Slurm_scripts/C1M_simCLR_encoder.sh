@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=Clothing1M_test
+#SBATCH --job-name=Clothing1M_simCLR_encoder
 #SBATCH --account=def-pfieguth
-#SBATCH --time=1:00:00
+#SBATCH --time=23:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=4000M
 #SBATCH --gpus=a100_3g.20gb:1
-#SBATCH --output=slurm_output_C1M/Clothing1M_test_%j.out
-#SBATCH --error=slurm_output_C1M/Clothing1M_test_%j.err
+#SBATCH --output=slurm_output_C1M/Clothing1M_simCLR_encoder_%j.out
+#SBATCH --error=slurm_output_C1M/Clothing1M_simCLR_encoder_%j.err
 #SBATCH --mail-user=dszczeci@uwaterloo.ca
 #SBATCH --mail-type=ALL
 
@@ -16,10 +16,7 @@ set -euo pipefail
 # --- Env ---
 module load python
 source ../envs/ssl_env/bin/activate
-
 cd ..
-
-#python ssl_C1M_experiment.py
 
 echo "Extracting Clothing1M dataset into /tmp..."
 
@@ -53,31 +50,8 @@ du -sh "$DATA_TMP" || true
 
 
 
-EPOCHS_SUP=1
-SEEDS=(1)
 
-# BASELINE: Supervised training on noisy labels (no SSL pretrain)
-echo ">>> Running BASELINE supervised experiments..."
-for SEED in "${SEEDS[@]}"; do
-    EXP_NAME="baseline-C1M_supE-${EPOCHS_SUP}_s-${SEED}"
-    echo "[BASELINE] SEED=${SEED}"
-
-    python ssl_C1M_experiment.py \
-      --mode train_eval \
-      --seed "${SEED}" \
-      --workers 4 \
-      --images_dir "$DATA_TMP" \
-      --meta_dir "$META_DIR" \
-      --epochs "${EPOCHS_SUP}" \
-      --exp-name "${EXP_NAME}" \
-
-    echo ">>> Finished baseline: ${EXP_NAME}"
-    echo "---------------------------------------------"
-done
-
-
-
-SSL_EPOCHS=1
+SSL_EPOCHS=50
 SEEDS=(1)
 
 # SSL Pretrain
@@ -101,29 +75,5 @@ for SEED in "${SEEDS[@]}"; do
 done
 
 
-EPOCHS_PRE=(1)
-
-# Fine-tune from SSL
-echo ">>> Running FINE-TUNING from pretrained encoders..."
-for SEED in "${SEEDS[@]}"; do
-  for PRE_E in "${EPOCHS_PRE[@]}"; do
-      EXP_NAME="simclr_C1M_preE-${PRE_E}_supE-${EPOCHS_SUP}_s-${SEED}"
-      echo "[FINETUNE] SEED=${SEED} PRETRAIN_EPOCHS=${PRE_E} Supervised_Epochs=${EPOCHS_SUP}"
-
-      python ssl_C1M_experiment.py \
-        --results-root results_C1M \
-        --mode train_eval \
-        --seed "${SEED}" \
-        --workers 4 \
-        --images_dir "$DATA_TMP" \
-        --meta_dir "$META_DIR" \
-        --epochs "${EPOCHS_SUP}" \
-        --exp-name "${EXP_NAME}" \
-        --pretrained-encoder-path "C1M/simclr_C1M_e${PRE_E}_s${SEED}.pth"
-
-      echo ">>> Finished fine-tuning: ${EXP_NAME}"
-      echo "---------------------------------------------"
-  done
-done
 
 echo "[INFO] Job complete."

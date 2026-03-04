@@ -93,31 +93,8 @@ def build_ssl_loader_C1M(images_dir, meta_dir,
         shuffle=True,
         num_workers=workers,
         drop_last=True,
-        pin_memory=True
+        pin_memory=False
     )
-
-
-class AsymmetricNoisyWrapper(Dataset):
-    def __init__(self, base: Dataset, T: np.ndarray, seed: int=42):
-        assert T.shape[0] == T.shape[1]
-        self.base = base
-        self.num_classes = T.shape[0]
-        self.T = T
-        rng = np.random.default_rng(seed)
-        # pre-sample all noisy labels
-        ys = []
-        for _, y in base:
-            ys.append(y)
-        ys = np.array(ys)
-        self.noisy_targets = ys.copy()
-        for c in range(self.num_classes):
-            idx = np.where(ys==c)[0]
-            if len(idx)==0: continue
-            self.noisy_targets[idx] = rng.choice(self.num_classes, size=len(idx), p=T[c])
-    def __len__(self): return len(self.base)
-    def __getitem__(self, i):
-        x,_ = self.base[i]
-        return x, int(self.noisy_targets[i])
 
 
 
@@ -155,7 +132,7 @@ def get_C1M_loaders(images_dir, meta_dir,
     train_loader = DataLoader(
         ds_train, batch_size=batch_size,
         shuffle=True, num_workers=workers,
-        pin_memory=True, drop_last=True
+        pin_memory=False, drop_last=True
     )
 
     # For accuracy evaluation
@@ -209,12 +186,12 @@ def evaluate(model: nn.Module, loader: DataLoader, device: str):
 
 def train_supervised(model: nn.Module, train_loader: DataLoader, test_loader: DataLoader,
                      device: str, epochs: int, lr: float, wd: float,
-                     logger=print, save_path: Optional[str]=None):
+                     logger=print, save_path: Optional[str]=None,
+                     save_every: int = 10, is_finetune: bool=False):
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
     ce = nn.CrossEntropyLoss()
-    best = 0.0
     t0 = time.time()
-
+    best = 0.0
     for ep in range(1, epochs + 1):
         model.train()
         total_train_loss = 0.0
@@ -246,11 +223,20 @@ def train_supervised(model: nn.Module, train_loader: DataLoader, test_loader: Da
             f"Test(clean)Acc={test_acc*100:.2f}% | "
             f"TestLoss={test_loss:.4f}"
         )
+        
+        prefix = "ft_" if is_finetune else "baseline_"
+        
+        # ---- SAVE EVERY N EPOCHS ----        
+        if save_path and ep % save_every == 0:
+            save_ckpt = os.path.join(save_path, f"{prefix}C1M_epoch-{ep}.pt")
+            torch.save(model.state_dict(), save_ckpt)
+            logger(f"[Checkpoint] Saved {save_ckpt}")
 
         # ---- Save best model ----
         if save_path and test_acc > best:
             best = test_acc
-            torch.save(model.state_dict(), save_path)
+            save_ckpt = os.path.join(save_path, f"{prefix}C1M_best.pt")
+            torch.save(model.state_dict(), save_ckpt)
 
     logger(f"[Supervised] Done in {(time.time() - t0) / 60:.2f} min. Best Acc={best * 100:.2f}%")
     return best
@@ -343,7 +329,7 @@ def main():
     p.add_argument("--epochs", type=int, default=10)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--wd", type=float, default=1e-4)
-    p.add_argument("--batch-size", type=int, default=256)
+    p.add_argument("--batch-size", type=int, default=128)
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--freeze-backbone", action="store_true")
     p.add_argument("--pretrained-encoder-path", type=str, default="", help="optional: load this into classifier")
@@ -356,7 +342,7 @@ def main():
     #simCLR
     p.add_argument("--pretrain-lr", type=float, default=1e-3)
     p.add_argument("--pretrain-wd", type=float, default=1e-4)
-    p.add_argument("--batch-size-ssl", type=int, default=256)
+    p.add_argument("--batch-size-ssl", type=int, default=128)
     p.add_argument("--proj-dim", type=int, default=128)
     p.add_argument("--proj-hidden", type=int, default=512)
     p.add_argument("--temperature", type=float, default=0.5)
@@ -445,16 +431,11 @@ def main():
     
  
 
-    ckpt_name = ("ft_" if args.pretrained_encoder_path else "baseline_") \
-                + f"{args.dataset}_freeze{int(args.freeze_backbone)}.pt"
-    
-    ckpt_path = os.path.join(exp_dir, ckpt_name)
-
-    
 
     acc = train_supervised(clf, train_loader, clean_eval_loader, device,
                            epochs=args.epochs, lr=args.lr, wd=args.wd,
-                           logger=lambda m: log_print(m, log_path), save_path=ckpt_path)
+                           logger=lambda m: log_print(m, log_path), save_path=exp_dir, 
+                           save_every=5, is_finetune=bool(args.pretrained_encoder_path))
 
     log_print(f"[Result] Final Test Acc: {acc*100:.2f}%", log_path)
 

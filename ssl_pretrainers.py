@@ -20,7 +20,8 @@ class NTXent(nn.Module):
         z = torch.cat([z_i, z_j], dim=0)
         sim = torch.matmul(z, z.T)
         mask = torch.eye(2*B, device=z.device, dtype=torch.bool)
-        sim = sim.masked_fill(mask, -9e15)
+        #sim = sim.masked_fill(mask, -9e15)
+        sim = sim.masked_fill(mask, torch.finfo(sim.dtype).min)
         pos = torch.cat([torch.arange(B, 2*B), torch.arange(0, B)]).to(z.device)
         logits = sim / self.t
         labels = pos
@@ -83,6 +84,9 @@ class SimCLRPretrainer(BasePretrainer):
         t0 = time.time()
         model.to(device)
 
+        scaler = torch.amp.GradScaler("cuda")
+
+
         for ep in range(1, epochs + 1):
             model.train()
             loss_sum, n = 0.0, 0
@@ -91,11 +95,17 @@ class SimCLRPretrainer(BasePretrainer):
                 x_i, x_j = x_i.to(device), x_j.to(device)
 
                 opt.zero_grad(set_to_none=True)
-                li = model(x_i)
-                lj = model(x_j)
-                loss = loss_fn(li, lj)
-                loss.backward()
-                opt.step()
+
+                with torch.amp.autocast("cuda"):
+                    li = model(x_i)
+                    lj = model(x_j)
+                # force loss to fp32
+                loss = loss_fn(li.float(), lj.float())
+                
+
+                scaler.scale(loss).backward()
+                scaler.step(opt)
+                scaler.update()
 
                 bs = x_i.size(0)
                 loss_sum += loss.item() * bs
@@ -197,13 +207,20 @@ class BarlowTwinsPretrainer(BasePretrainer):
         model.to(device)
         model.train()
         opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
-
+        scaler = torch.amp.GradScaler("cuda")
         for ep in range(1, epochs+1):
             ep_loss, n = 0.0, 0
             for (x1, x2), _ in ssl_loader:
                 x1, x2 = x1.to(device), x2.to(device)
-                z1 = model(x1)
-                z2 = model(x2)
+                
+                opt.zero_grad(set_to_none=True)
+                with torch.amp.autocast("cuda"):
+                    z1 = model(x1)
+                    z2 = model(x2)
+
+                # compute correlation in fp32 for stability
+                z1 = z1.float()
+                z2 = z2.float()
 
                 z1 = (z1 - z1.mean(0)) / (z1.std(0) + 1e-9)
                 z2 = (z2 - z2.mean(0)) / (z2.std(0) + 1e-9)
@@ -215,9 +232,9 @@ class BarlowTwinsPretrainer(BasePretrainer):
                 off_diag = _off_diagonal(c).pow_(2).sum()
                 loss = on_diag + lambd * off_diag
 
-                opt.zero_grad(set_to_none=True)
-                loss.backward()
-                opt.step()
+                scaler.scale(loss).backward()
+                scaler.step(opt)
+                scaler.update()
 
                 ep_loss += loss.item() * x1.size(0)
                 n += x1.size(0)

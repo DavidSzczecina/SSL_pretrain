@@ -8,7 +8,9 @@ results_c100_long
 results_cifar-n
 results_cifar-10n
 results_cifar-100n
+results_C1M
 slurm_output
+slurm_output_C1M
 old
 venvs/
 envs/
