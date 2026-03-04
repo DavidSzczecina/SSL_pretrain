@@ -3,7 +3,7 @@
 #SBATCH --account=def-pfieguth
 #SBATCH --time=0:59:00
 #SBATCH --mem-per-cpu=8G
-#SBATCH --gpus=a100_1g.5gb:1
+#SBATCH --gpus=a100_3g.20gb:1
 #SBATCH --output=slurm_output_C1M/Clothing1M_test_%j.out
 #SBATCH --error=slurm_output_C1M/Clothing1M_test_%j.err
 #SBATCH --mail-user=dszczeci@uwaterloo.ca
@@ -13,8 +13,9 @@
 set -euo pipefail
 
 # --- Env ---
-#module load python
-#source ../envs/env/bin/activate
+module load python
+source ../envs/ssl_env/bin/activate
+
 cd ..
 
 

@@ -10,5 +10,7 @@ results_cifar-10n
 results_cifar-100n
 slurm_output
 old
+venvs/
+envs/
 .ipynb_checkpoints
 __pycache__
