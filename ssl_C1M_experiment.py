@@ -30,26 +30,20 @@ def log_print(msg: str, log_path: Optional[str] = None):
     if log_path:
         with open(log_path, "a") as f: f.write(msg + "\n")
 
-# ================ Data & Augs ================
 
+# ================ Data & Augs ================
 
 class SimCLRAugment224:
     def __init__(self):
         self.base = transforms.Compose([
             transforms.RandomResizedCrop(224, scale=(0.2, 1.0)),
             transforms.RandomHorizontalFlip(),
-            transforms.RandomApply(
-                [transforms.ColorJitter(0.8,0.8,0.8,0.2)], p=0.8
-            ),
+            transforms.RandomApply([transforms.ColorJitter(0.8,0.8,0.8,0.2)], p=0.8),
             transforms.RandomGrayscale(p=0.2),
             transforms.GaussianBlur(kernel_size=23, sigma=(0.1, 2.0)),
             transforms.ToTensor(),
-            transforms.Normalize(
-                mean=(0.485,0.456,0.406),
-                std=(0.229,0.224,0.225)
-            )
+            transforms.Normalize(mean=(0.485,0.456,0.406), std=(0.229,0.224,0.225))
         ])
-
     def __call__(self, img):
         return self.base(img), self.base(img)
 
@@ -58,22 +52,15 @@ class CleanEvalWrapper(Dataset):
     """Wraps Clothing1MCleanDataset but returns only (x, y)."""
     def __init__(self, base_ds):
         self.base_ds = base_ds
-
     def __len__(self):
         return len(self.base_ds)
-
     def __getitem__(self, i):
         x, y, _, _ = self.base_ds[i]
         return x, y
 
 
-
-
-def build_ssl_loader_C1M(images_dir, meta_dir,
-                               batch_size, workers):
-
+def build_ssl_loader_C1M(images_dir, meta_dir, batch_size, workers):
     splits = build_clothing1m_splits(images_dir, meta_dir)
-
     tf_ssl = SimCLRAugment224()
 
     class SSLDataset(Dataset):
@@ -86,45 +73,23 @@ def build_ssl_loader_C1M(images_dir, meta_dir,
             return tf_ssl(img), 0
 
     ds = SSLDataset(splits.noisy_only)
-
     return DataLoader(
-        ds,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=workers,
-        drop_last=True,
-        pin_memory=False
-    )
+        ds, batch_size=batch_size, shuffle=True,
+        num_workers=workers, drop_last=True, pin_memory=False)
 
 
 
-def get_C1M_loaders(images_dir, meta_dir,
-                           batch_size, workers):
+def get_C1M_loaders(images_dir, meta_dir, batch_size, workers):
 
     splits = build_clothing1m_splits(images_dir, meta_dir)
-
     num_classes = len(splits.classes)
 
-    train_tf = transforms.Compose([
-        transforms.Resize(256),
-        transforms.RandomResizedCrop(224, scale=(0.6, 1.0)),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=(0.485,0.456,0.406),
-            std=(0.229,0.224,0.225)
-        ),
-    ])
+    train_tf = transforms.Compose([transforms.Resize(256), transforms.RandomResizedCrop(224, scale=(0.6, 1.0)),
+        transforms.RandomHorizontalFlip(), transforms.ToTensor(),
+        transforms.Normalize(mean=(0.485,0.456,0.406),std=(0.229,0.224,0.225)),])
 
-    eval_tf = transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=(0.485,0.456,0.406),
-            std=(0.229,0.224,0.225)
-        ),
-    ])
+    eval_tf = transforms.Compose([transforms.Resize(256), transforms.CenterCrop(224), transforms.ToTensor(),
+        transforms.Normalize(mean=(0.485,0.456,0.406), std=(0.229,0.224,0.225)),])
 
     ds_train = Clothing1MNoisyDataset(splits.noisy_only, train_tf)
     ds_clean = Clothing1MCleanDataset(splits.clean_all, eval_tf)
@@ -140,28 +105,25 @@ def get_C1M_loaders(images_dir, meta_dir,
 
     clean_eval_loader = DataLoader(
         ds_clean_eval, batch_size=batch_size,
-        shuffle=False, num_workers=workers
-    )
+        shuffle=False, num_workers=workers)
 
     # For Cleanlab block
     clean_full_loader = DataLoader(
         ds_clean, batch_size=batch_size,
-        shuffle=False, num_workers=workers
-    )
+        shuffle=False, num_workers=workers)
 
     return train_loader, clean_eval_loader, clean_full_loader, num_classes
 
 
 
-
 # ================ Model ================
 class ResNet50(nn.Module):
-    def __init__(self, imagenet_pretrain=True, num_classes=14):
+    def __init__(self, imagenet_pretrain=False, num_classes=14):
         super().__init__()
 
-        weights = models.ResNet50_Weights.IMAGENET1K_V1 if imagenet_pretrain else None
-        base = models.resnet50(weights=weights)
-
+        base = models.resnet50(weights=None)
+        if imagenet_pretrain:
+            base = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
         self.features = nn.Sequential(*list(base.children())[:-1])
         self.fc = nn.Linear(base.fc.in_features, num_classes)
 
@@ -171,6 +133,45 @@ class ResNet50(nn.Module):
         if return_feat:
             return x
         return self.fc(x)
+
+# ================ CleanLab Eval ================
+def run_cleanlab_eval(model, clean_full_loader, device, exp_dir, epoch):
+    model.eval()
+
+    probs = []
+    noisy_labels = []
+    verification = []
+
+    with torch.no_grad():
+        for x, y, verif, idx in clean_full_loader:
+            x = x.to(device)
+            logits = model(x)
+
+            p = torch.softmax(logits, dim=1).cpu().numpy()
+            probs.append(p)
+
+            noisy_labels.append(y.numpy())
+            verification.append(verif.numpy())
+
+    probs = np.concatenate(probs, axis=0)
+    noisy_labels = np.concatenate(noisy_labels, axis=0)
+    verification = np.concatenate(verification, axis=0)
+
+    issue_idx = find_label_issues(
+        labels=noisy_labels,
+        pred_probs=probs,
+        return_indices_ranked_by="self_confidence"
+    )
+
+    metrics = eval_label_issue_detection(issue_idx, verification)
+
+    out_path = os.path.join(exp_dir, f"cleanlab_metrics_epoch_{epoch}.json")
+    with open(out_path, "w") as f:
+        json.dump(metrics, f, indent=2)
+
+    print(f"[Cleanlab] Epoch {epoch} metrics:")
+    print(json.dumps(metrics, indent=2))
+
 
 # ================ Supervised train / eval ================
 @torch.no_grad()
@@ -187,7 +188,7 @@ def evaluate(model: nn.Module, loader: DataLoader, device: str):
 def train_supervised(model: nn.Module, train_loader: DataLoader, test_loader: DataLoader,
                      device: str, epochs: int, lr: float, wd: float,
                      logger=print, save_path: Optional[str]=None,
-                     save_every: int = 10, is_finetune: bool=False):
+                     save_every: int = 1, is_finetune: bool=False, clean_full_loader=None):
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
     ce = nn.CrossEntropyLoss()
     t0 = time.time()
@@ -231,6 +232,11 @@ def train_supervised(model: nn.Module, train_loader: DataLoader, test_loader: Da
             save_ckpt = os.path.join(save_path, f"{prefix}C1M_epoch-{ep}.pt")
             torch.save(model.state_dict(), save_ckpt)
             logger(f"[Checkpoint] Saved {save_ckpt}")
+            
+            # ---- RUN CLEANLAB ----
+            if clean_full_loader is not None:
+                print("Running Cleanlab eval")
+                run_cleanlab_eval(model, clean_full_loader, device, save_path, ep)
 
         # ---- Save best model ----
         if save_path and test_acc > best:
@@ -240,6 +246,7 @@ def train_supervised(model: nn.Module, train_loader: DataLoader, test_loader: Da
 
     logger(f"[Supervised] Done in {(time.time() - t0) / 60:.2f} min. Best Acc={best * 100:.2f}%")
     return best
+
 
 def evaluate_train_noisy(model, loader, device):
     model.eval(); total=correct=0
@@ -277,7 +284,6 @@ def predict_proba(model: nn.Module, loader: DataLoader, device: str, num_classes
         x = x.to(device); logits = model(x)
         out.append(torch.softmax(logits, dim=1).detach().cpu().numpy())
     return np.concatenate(out, axis=0)
-
 
 
 # Metrics for label-error detection
@@ -331,40 +337,38 @@ def main():
     p.add_argument("--wd", type=float, default=1e-4)
     p.add_argument("--batch-size", type=int, default=128)
     p.add_argument("--workers", type=int, default=1)
-    p.add_argument("--freeze-backbone", action="store_true")
     p.add_argument("--pretrained-encoder-path", type=str, default="", help="optional: load this into classifier")
     # pretraining
     p.add_argument("--pretrain-name", type=str, default="simclr", help="which SSL method to run/use")
     p.add_argument("--pretrain-epochs", type=int, default=10)
     p.add_argument("--save-every", type=int, default=5)
+    p.add_argument("--ssl_save-every", type=int, default=5)
     p.add_argument("--save-pretrained-encoder", type=str, default="", help="filename to save encoder during --mode pretrain")
     
     #simCLR
-    p.add_argument("--pretrain-lr", type=float, default=1e-3)
-    p.add_argument("--pretrain-wd", type=float, default=1e-4)
     p.add_argument("--batch-size-ssl", type=int, default=128)
-    p.add_argument("--proj-dim", type=int, default=128)
-    p.add_argument("--proj-hidden", type=int, default=512)
-    p.add_argument("--temperature", type=float, default=0.5)
+    p.add_argument("--pretrain-lr", type=float, default=3e-4)
+    p.add_argument("--pretrain-wd", type=float, default=1e-4)
+    p.add_argument("--proj-dim", type=int, default=256)
+    p.add_argument("--proj-hidden", type=int, default=2048)
+    p.add_argument("--temperature", type=float, default=0.3)
+    p.add_argument("--warmup-epochs", type=int, default=5)
+    p.add_argument("--min-lr", type=float, default=1e-6)
+    p.add_argument("--grad-accum-steps", type=int, default=2)
     
     args = p.parse_args()
-
 
     set_seed(args.seed)
     device = args.device if (torch.cuda.is_available() and args.device.startswith("cuda")) else "cpu"
 
 
-
-    # Keep results separated by user-facing dataset name (so 10N/100N get their own folders)
+    # Experiment folder naming
     results_root = args.results_root or f"results_{args.dataset}"
     ensure_dir(results_root); ensure_dir(args.pretrained_dir)
 
-    # Experiment folder naming
     if not args.exp_name:
         args.exp_name = f"{args.mode}_{args.dataset}"
     
-
-
     results_root = args.results_root or f"results_{args.dataset}"
     ensure_dir(results_root); ensure_dir(args.pretrained_dir)
 
@@ -376,9 +380,8 @@ def main():
     log_path = os.path.join(exp_dir, "logs.txt")
     metrics_path = os.path.join(exp_dir, args.metrics_name)
 
+
     # data
-
-
     train_loader, clean_eval_loader, clean_full_loader, num_classes = get_C1M_loaders(
     args.images_dir, args.meta_dir, args.batch_size, args.workers)
 
@@ -393,19 +396,15 @@ def main():
         pretrainer = get_pretrainer(args.pretrain_name)
         ssl_model = pretrainer.build(encoder, in_dim = 2048, proj_dim=args.proj_dim, hidden=args.proj_hidden)
         # fit
-
         def _save_fn(ssl_model, ep):
             enc = pretrainer.extract_encoder(ssl_model)
             path = os.path.join(args.pretrained_dir, f"{args.pretrain_name}_{args.dataset}_e{ep}_s{args.seed}.pth")
             save_encoder(enc, path)
             log_print(f"[Pretrain] Saved encoder @e{ep} -> {path}", log_path)
 
-        pretrainer.fit(
-            ssl_model, ssl_loader, device,
-            epochs=args.pretrain_epochs, lr=args.pretrain_lr, wd=args.pretrain_wd,
-            temperature=args.temperature,
-            save_every=args.save_every, save_fn=_save_fn, logger=lambda m: log_print(m, log_path)
-        )
+        pretrainer.fit(ssl_model, ssl_loader, device, epochs=args.pretrain_epochs, lr=args.pretrain_lr, wd=args.pretrain_wd,
+            temperature=args.temperature, warmup_epochs=args.warmup_epochs, min_lr=args.min_lr, grad_accum_steps=args.grad_accum_steps,
+            save_every=args.ssl_save_every, save_fn=_save_fn, logger=lambda m: log_print(m, log_path))
 
         # save encoder if asked
         if args.save_pretrained_encoder:
@@ -423,19 +422,15 @@ def main():
     if args.pretrained_encoder_path and os.path.exists(encoder_path):
         load_encoder_into_classifier(encoder_path, clf)
         print("Pretrained encoder being used")
-        if args.freeze_backbone:
-            for p in clf.features.parameters(): p.requires_grad = False
-            print("Freezing backbone")
+    elif args.imagenet_pretrain:
+        print("ImageNet weights being used")
     else:
         print("No pretrained encoder used")
     
- 
 
-
-    acc = train_supervised(clf, train_loader, clean_eval_loader, device,
-                           epochs=args.epochs, lr=args.lr, wd=args.wd,
-                           logger=lambda m: log_print(m, log_path), save_path=exp_dir, 
-                           save_every=5, is_finetune=bool(args.pretrained_encoder_path))
+    acc = train_supervised(clf, train_loader, clean_eval_loader, device, epochs=args.epochs, lr=args.lr, 
+                           wd=args.wd, logger=lambda m: log_print(m, log_path), save_path=exp_dir, save_every=args.save_every,
+                           is_finetune=bool(args.pretrained_encoder_path), clean_full_loader=clean_full_loader)
 
     log_print(f"[Result] Final Test Acc: {acc*100:.2f}%", log_path)
 
@@ -449,7 +444,6 @@ def main():
         "test_acc": acc,
         "timestamp": time.time(),
     }
-
 
     # Predict on clean_all
     # Reconstruct splits to access verification labels

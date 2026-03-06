@@ -1,15 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=Clothing1M_simCLR_encoder_2
+#SBATCH --job-name=Clothing1M_pretrain_simclr-e10
 #SBATCH --account=def-pfieguth
-#SBATCH --time=72:00:00
+#SBATCH --time=20:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=2000M
 #SBATCH --gpus=a100_3g.20gb:1
-#SBATCH --output=slurm_output_C1M/Clothing1M_simCLR_encoder_2_%j.out
-#SBATCH --error=slurm_output_C1M/Clothing1M_simCLR_encoder_2_%j.err
+#SBATCH --output=slurm_output_C1M/Clothing1M_pretrain_simclr-e10_%j.out
+#SBATCH --error=slurm_output_C1M/Clothing1M_pretrain_simclr-e10_%j.err
 #SBATCH --mail-user=dszczeci@uwaterloo.ca
 #SBATCH --mail-type=ALL
-
 
 set -euo pipefail
 
@@ -17,6 +16,7 @@ set -euo pipefail
 module load python
 source ../envs/ssl_env/bin/activate
 cd ..
+
 
 echo "Extracting Clothing1M dataset into /tmp..."
 
@@ -50,27 +50,27 @@ du -sh "$DATA_TMP" || true
 
 
 
-
-SSL_EPOCHS=51
+EPOCHS_SUP=15
 SEEDS=(1)
 
-# SSL Pretrain
+# BASELINE: Supervised training on noisy labels (no SSL pretrain)
+echo ">>> Running BASELINE supervised experiments..."
 for SEED in "${SEEDS[@]}"; do
-    EXP_NAME="simclr_C1M_e${SSL_EPOCHS}_s${SEED}"
-    echo "[SSL PRETRAIN] SEED=${SEED} EPOCHS=${SSL_EPOCHS}"
-    
+    EXP_NAME="simclr_C1M_preE-10_supE-${EPOCHS_SUP}_s-${SEED}"
+    echo "[BASELINE] SEED=${SEED}"
+
     python ssl_C1M_experiment.py \
-    --mode pretrain \
-    --pretrain-name simclr \
-    --workers 4 \
-    --seed "${SEED}" \
-    --images_dir "$DATA_TMP" \
-    --meta_dir "$META_DIR" \
-    --pretrain-epochs "${SSL_EPOCHS}" \
-    --exp-name "${EXP_NAME}" \
-    --save-pretrained-encoder "C1M/simclr_C1M_e${SSL_EPOCHS}_s${SEED}.pth" \
-    
-    echo ">>> Finished pretraining: ${EXP_NAME}"
+      --mode train_eval \
+      --seed "${SEED}" \
+      --workers 4 \
+      --images_dir "$DATA_TMP" \
+      --meta_dir "$META_DIR" \
+      --epochs "${EPOCHS_SUP}" \
+      --exp-name "${EXP_NAME}" \
+      --save-every 1 \
+      --pretrained-encoder-path "simclr_C1M_e10_s1.pth"
+
+    echo ">>> Finished baseline: ${EXP_NAME}"
     echo "---------------------------------------------"
 done
 

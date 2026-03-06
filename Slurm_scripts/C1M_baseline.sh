@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=Clothing1M_baseline
+#SBATCH --job-name=Clothing1M_baseline_s5
 #SBATCH --account=def-pfieguth
-#SBATCH --time=23:00:00
+#SBATCH --time=20:00:00
 #SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=4000M
+#SBATCH --mem-per-cpu=2000M
 #SBATCH --gpus=a100_3g.20gb:1
-#SBATCH --output=slurm_output_C1M/Clothing1M_baseline_%j.out
-#SBATCH --error=slurm_output_C1M/Clothing1M_baseline_%j.err
+#SBATCH --output=slurm_output_C1M/Clothing1M_baseline_s5_%j.out
+#SBATCH --error=slurm_output_C1M/Clothing1M_baseline_s5_%j.err
 #SBATCH --mail-user=dszczeci@uwaterloo.ca
 #SBATCH --mail-type=ALL
 
@@ -50,8 +50,8 @@ du -sh "$DATA_TMP" || true
 
 
 
-EPOCHS_SUP=25
-SEEDS=(1)
+EPOCHS_SUP=15
+SEEDS=(5)
 
 # BASELINE: Supervised training on noisy labels (no SSL pretrain)
 echo ">>> Running BASELINE supervised experiments..."
@@ -67,6 +67,7 @@ for SEED in "${SEEDS[@]}"; do
       --meta_dir "$META_DIR" \
       --epochs "${EPOCHS_SUP}" \
       --exp-name "${EXP_NAME}" \
+      --save-every 1
 
     echo ">>> Finished baseline: ${EXP_NAME}"
     echo "---------------------------------------------"

@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import math
 
 
-SAVE_EPOCHS = {5, 10, 25, 50, 75, 100}
+SAVE_EPOCHS = {5, 10, 15, 20, 25, 30, 35, 40, 45, 50}
 
 # --------- Minimal NT-Xent from your file ---------
 class NTXent(nn.Module):
@@ -74,7 +74,9 @@ class SimCLRPretrainer(BasePretrainer):
 
     def fit(self, model: nn.Module, ssl_loader, device: str,
             epochs: int = 10, lr: float = 1e-3, wd: float = 1e-4,
-            save_every: int = 5, save_fn=None, temperature: float = 0.5, logger=print):
+            save_every: int = 5, save_fn=None, temperature: float = 0.5,
+            warmup_epochs: int = 5, min_lr: float = 1e-6, grad_accum_steps: int = 1,
+            logger=print):
         """
         Trains SimCLR with optional checkpoint saving every `save_every` epochs.
         """
@@ -86,32 +88,79 @@ class SimCLRPretrainer(BasePretrainer):
 
         scaler = torch.amp.GradScaler("cuda")
 
+        if grad_accum_steps < 1:
+            raise ValueError("grad_accum_steps must be >= 1")
+
+        steps_per_epoch = len(ssl_loader)
+        updates_per_epoch = max(1, steps_per_epoch // grad_accum_steps)
+        total_updates = max(1, epochs * updates_per_epoch)
+        warmup_updates = max(0, min(total_updates, warmup_epochs * updates_per_epoch))
+
+        def lr_lambda(step: int) -> float:
+            # step is optimizer-update index (0..total_updates-1)
+            if warmup_updates > 0 and step < warmup_updates:
+                return float(step + 1) / float(warmup_updates)  # linear warmup to 1.0
+            # cosine from 1.0 -> (min_lr/lr)
+            progress = 0.0 if total_updates == warmup_updates else (step - warmup_updates) / float(max(1, total_updates - warmup_updates))
+            cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+            min_ratio = float(min_lr) / float(lr)
+            return min_ratio + (1.0 - min_ratio) * cosine
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda=lr_lambda)
+
 
         for ep in range(1, epochs + 1):
             model.train()
             loss_sum, n = 0.0, 0
+            opt.zero_grad(set_to_none=True)
+            update_in_epoch = 0  # counts optimizer updates (after accumulation)
 
-            for (x_i, x_j), _ in ssl_loader:
+            for step_idx, ((x_i, x_j), _) in enumerate(ssl_loader, start=1):          
                 x_i, x_j = x_i.to(device), x_j.to(device)
-
-                opt.zero_grad(set_to_none=True)
 
                 with torch.amp.autocast("cuda"):
                     li = model(x_i)
                     lj = model(x_j)
-                # force loss to fp32
-                loss = loss_fn(li.float(), lj.float())
-                
+
+                # force loss to fp32 and scale for grad accumulation
+                loss = loss_fn(li.float(), lj.float()) / float(grad_accum_steps)
 
                 scaler.scale(loss).backward()
+
+                # do optimizer step every grad_accum_steps
+
+                if (step_idx % grad_accum_steps) == 0:
+                    prev_scale = scaler.get_scale()
+
+                    scaler.step(opt)
+                    scaler.update()
+
+                    if scaler.get_scale() >= prev_scale:
+                        scheduler.step()
+
+                    opt.zero_grad(set_to_none=True)
+                    update_in_epoch += 1
+
+
+                bs = x_i.size(0)
+                loss_sum += (loss.item() * grad_accum_steps) * bs  # un-scale for logging
+                n += bs
+
+            # If last partial accumulation didn't trigger a step, flush it
+            if (steps_per_epoch % grad_accum_steps) != 0:
+                prev_scale = scaler.get_scale()
+
                 scaler.step(opt)
                 scaler.update()
 
-                bs = x_i.size(0)
-                loss_sum += loss.item() * bs
-                n += bs
+                if scaler.get_scale() >= prev_scale:
+                    scheduler.step()
 
-            logger(f"[SimCLR] Epoch {ep:03d} | Loss={loss_sum / max(n, 1):.4f}")
+                opt.zero_grad(set_to_none=True)
+                update_in_epoch += 1
+
+            cur_lr = opt.param_groups[0]["lr"]
+            logger(f"[SimCLR] Epoch {ep:03d} | Loss={loss_sum / max(n, 1):.4f} | LR={cur_lr:.3e}")
 
             #if save_every > 0 and save_fn is not None and ep % save_every == 0:
             if save_fn is not None and ep in SAVE_EPOCHS:
@@ -195,8 +244,8 @@ class BarlowTwinsPretrainer(BasePretrainer):
         return _BarlowNet(encoder_backbone, proj)
 
     def fit(self, model: nn.Module, ssl_loader, device: str,
-            epochs: int = 100, lr: float = 3e-4, wd: float = 1e-4,
-            lambd: float = 5e-3,
+            epochs: int = 100, lr: float = 1e-3, wd: float = 1e-4,
+            lambd: float = 1e-2,
             save_every: int = 5, save_fn=None, logger=print, **_):
         """
         Barlow Twins objective:
@@ -207,13 +256,26 @@ class BarlowTwinsPretrainer(BasePretrainer):
         model.to(device)
         model.train()
         opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
+
+        steps_per_epoch = len(ssl_loader)
+        total_steps = epochs * steps_per_epoch
+        warmup_steps = 5 * steps_per_epoch
+
+        def lr_lambda(step):
+            if step < warmup_steps:
+                return step / warmup_steps
+            progress = (step - warmup_steps) / (total_steps - warmup_steps)
+            return 0.5 * (1 + math.cos(math.pi * progress))
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+
+
         scaler = torch.amp.GradScaler("cuda")
         for ep in range(1, epochs+1):
             ep_loss, n = 0.0, 0
             for (x1, x2), _ in ssl_loader:
                 x1, x2 = x1.to(device), x2.to(device)
                 
-                opt.zero_grad(set_to_none=True)
                 with torch.amp.autocast("cuda"):
                     z1 = model(x1)
                     z2 = model(x2)
@@ -225,16 +287,27 @@ class BarlowTwinsPretrainer(BasePretrainer):
                 z1 = (z1 - z1.mean(0)) / (z1.std(0) + 1e-9)
                 z2 = (z2 - z2.mean(0)) / (z2.std(0) + 1e-9)
 
+                z1 = F.normalize(z1, dim=1)
+                z2 = F.normalize(z2, dim=1)
+
                 N, D = z1.shape
-                c = (z1.T @ z2) / (N - 1)
+                c = (z1.T @ z2) / (N)
 
                 on_diag = torch.diagonal(c).add_(-1).pow_(2).sum()
                 off_diag = _off_diagonal(c).pow_(2).sum()
                 loss = on_diag + lambd * off_diag
 
                 scaler.scale(loss).backward()
+
+                prev_scale = scaler.get_scale()
                 scaler.step(opt)
                 scaler.update()
+
+                # only step scheduler if optimizer actually stepped
+                if scaler.get_scale() >= prev_scale:
+                    scheduler.step()
+
+                opt.zero_grad(set_to_none=True)
 
                 ep_loss += loss.item() * x1.size(0)
                 n += x1.size(0)

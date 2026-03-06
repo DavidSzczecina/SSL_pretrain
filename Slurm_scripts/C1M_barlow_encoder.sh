@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=Clothing1M_barlow_encoder
 #SBATCH --account=def-pfieguth
-#SBATCH --time=23:00:00
+#SBATCH --time=72:00:00
 #SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=4000M
+#SBATCH --mem-per-cpu=2000M
 #SBATCH --gpus=a100_3g.20gb:1
 #SBATCH --output=slurm_output_C1M/Clothing1M_barlow_encoder_%j.out
 #SBATCH --error=slurm_output_C1M/Clothing1M_barlow_encoder_%j.err
@@ -51,7 +51,7 @@ du -sh "$DATA_TMP" || true
 
 
 
-SSL_EPOCHS=50
+SSL_EPOCHS=51
 SEEDS=(1)
 
 # SSL Pretrain
@@ -68,6 +68,8 @@ for SEED in "${SEEDS[@]}"; do
     --meta_dir "$META_DIR" \
     --pretrain-epochs "${SSL_EPOCHS}" \
     --exp-name "${EXP_NAME}" \
+    --pretrain-lr 1e-3 \
+    --proj-dim 1024 \
     --save-pretrained-encoder "C1M/barlow_C1M_e${SSL_EPOCHS}_s${SEED}.pth" \
     
     echo ">>> Finished pretraining: ${EXP_NAME}"
